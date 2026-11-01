@@ -49,6 +49,12 @@ setInterval(() => {
 
 http.createServer((req, res) => {
   cors(res);
+  // 接続できないときの切り分け用アクセスログ(ヘルスチェック以外)
+  if (!req.url.startsWith('/health')) {
+    const ua = req.headers['user-agent'] || '';
+    const dev = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Macintosh/.test(ua) ? 'Mac/iPad' : /Windows/.test(ua) ? 'Windows' : ua.slice(0, 20);
+    log(req.method, req.url.replace(/name=[^&]*/, 'name=…'), `[${dev}]`, req.headers.origin || '');
+  }
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
   const url = new URL(req.url, 'http://x');
   const m = url.pathname.match(/^\/rooms\/([\w-]{4,40})(\/events)?$/);

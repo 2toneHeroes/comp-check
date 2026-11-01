@@ -679,6 +679,11 @@
   remoteVideo.playsInline = true; remoteVideo.muted = true; remoteVideo.autoplay = true;
   const link = { role: null, es: null, room: null, me: rid(), pcs: new Map(), listTimer: 0 };
   const sigBase = () => (ST.sigUrl || '').trim().replace(/\/+$/, '');
+  const syncSigUrl = () => {
+    const v = $('#lpUrl').value.trim();
+    if (v && v !== ST.sigUrl) { ST.sigUrl = v; save(); }
+  };
+  const sigErr = (e) => lpStatus(`中継サーバーにつながらない: ${sigBase()} (${e?.message || e})。Tailscaleがオンか確認`);
   const lpStatus = (s) => { $('#lpStatus').textContent = s; };
   const sigPost = (msg) => fetch(`${sigBase()}/rooms/${link.room}`, {
     method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ ...msg, from: link.me }),
@@ -704,19 +709,20 @@
   const openEvents = (query) => new Promise((resolve, reject) => {
     const es = new EventSource(`${sigBase()}/rooms/${link.room}/events?peer=${link.me}${query}`);
     es.onopen = () => resolve(es);
-    es.onerror = () => { if (es.readyState === EventSource.CLOSED) reject(new Error('closed')); };
-    setTimeout(() => reject(new Error('timeout')), 6000);
+    es.onerror = () => { if (es.readyState === EventSource.CLOSED) reject(new Error('接続を拒否された')); };
+    setTimeout(() => { if (es.readyState !== EventSource.OPEN) { es.close(); reject(new Error('6秒応答なし')); } }, 6000);
   });
 
   // 送信(iPhone): カメラ映像を、参加してきた端末ごとに送る
   const startSend = async () => {
+    syncSigUrl();
     if (!sigBase()) return lpStatus('中継サーバーのURLを入れて');
     if (!camStream) await startCam();
     if (!camStream) return;
     link.role = 'send'; link.room = rid();
     lpStatus('中継サーバーに接続中…');
     try { link.es = await openEvents(`&name=${encodeURIComponent(deviceName())}`); }
-    catch (e) { link.role = null; updateLinkUI(); return lpStatus('中継サーバーにつながらない(URLとTailscaleを確認)'); }
+    catch (e) { link.role = null; updateLinkUI(); return sigErr(e); }
     link.es.onmessage = async (e) => {
       const m = JSON.parse(e.data);
       if (m.type === 'peer-join') {
@@ -758,10 +764,11 @@
 
   // 受信(iPad): 送信中の端末を一覧から選ぶ
   const listSenders = async () => {
+    syncSigUrl();
     if (!sigBase()) return lpStatus('中継サーバーのURLを入れて');
     let list;
     try { list = await (await fetch(`${sigBase()}/rooms`)).json(); }
-    catch (e) { return lpStatus('中継サーバーにつながらない(URLとTailscaleを確認)'); }
+    catch (e) { return sigErr(e); }
     lpStatus(list.length ? '見る端末を選ぶ' : '送信中の端末なし(iPhoneで「このカメラを送る」を押す)');
     $('#lpList').replaceChildren(...list.map((r) => {
       const b = document.createElement('button');
@@ -776,7 +783,7 @@
     link.role = 'recv'; link.room = room;
     lpStatus(`${name} に接続中…`);
     try { link.es = await openEvents(''); }
-    catch (e) { link.role = null; updateLinkUI(); return lpStatus('つながらない'); }
+    catch (e) { link.role = null; updateLinkUI(); return sigErr(e); }
     link.es.onmessage = async (e) => {
       const m = JSON.parse(e.data);
       if (m.type === 'offer') {
