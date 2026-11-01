@@ -1,0 +1,12 @@
+{
+  "name": "Comp Check",
+  "short_name": "Comp Check",
+  "description": "参考画像を重ねて構図とライティングを確認するツール",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#111111",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

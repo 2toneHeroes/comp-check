@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<title>Comp Check</title>
+<style>
+  :root { --bg: #111; --panel: #1b1b1b; --line: #333; --fg: #eee; --dim: #8a8a8a; --accent: #f5b642; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, -apple-system, sans-serif; overflow: hidden; -webkit-user-select: none; user-select: none; }
+  #app { display: flex; flex-direction: column; height: 100%; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  #bar { display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 6px 8px; background: var(--panel); border-bottom: 1px solid var(--line); align-items: center; }
+  #bar.min .tools { display: none; }
+  .grp { display: flex; gap: 3px; align-items: center; flex-wrap: wrap; }
+  .lbl { color: var(--dim); font-size: 11px; margin-right: 2px; }
+  button, select { background: #262626; color: var(--fg); border: 1px solid #3a3a3a; border-radius: 6px; padding: 5px 9px; font: inherit; cursor: pointer; white-space: nowrap; }
+  button.on { background: var(--accent); color: #111; border-color: var(--accent); }
+  button:disabled { opacity: .4; }
+  input[type=range] { width: 90px; accent-color: var(--accent); }
+  #stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 0; overflow: hidden; }
+  canvas.view { background: #000; touch-action: none; display: block; }
+  #hint { position: absolute; color: var(--dim); text-align: center; pointer-events: none; padding: 20px; line-height: 1.8; }
+  #hist { position: absolute; left: 10px; bottom: 10px; background: rgba(0,0,0,.65); border-radius: 6px; pointer-events: none; }
+  #strip { display: flex; gap: 6px; overflow-x: auto; padding: 6px 8px; background: var(--panel); border-top: 1px solid var(--line); min-height: 26px; align-items: center; }
+  #strip img { height: 72px; border-radius: 4px; border: 2px solid transparent; cursor: pointer; flex: none; }
+  #strip img.sel { border-color: var(--accent); }
+  #strip .info { color: var(--dim); font-size: 11px; flex: none; padding-right: 4px; }
+  #drop { position: absolute; inset: 0; border: 3px dashed var(--accent); background: rgba(245,182,66,.08); display: none; align-items: center; justify-content: center; font-size: 16px; pointer-events: none; z-index: 5; }
+  #toast { position: fixed; left: 50%; top: 70px; transform: translateX(-50%); background: #333; padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 10; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bar">
+    <button id="btnMin" title="ツールバーを畳む">☰</button>
+    <div class="grp">
+      <button id="btnCam">📷 カメラ</button>
+      <select id="selCam" hidden></select>
+      <button id="btnFreeze" disabled>⏸ 静止</button>
+      <button id="btnImg">🖼 画像</button>
+      <button id="btnRef">📁 参考を追加</button>
+      <button id="btnPrev">◀</button><button id="btnNext">▶</button>
+    </div>
+    <div class="grp tools">
+      <span class="lbl">表示</span>
+      <button data-mode="overlay">重ね</button>
+      <button data-mode="side">並べ</button>
+      <button data-mode="wipe">ワイプ</button>
+    </div>
+    <div class="grp tools">
+      <span class="lbl">透過</span>
+      <input id="rngOpacity" type="range" min="0" max="100">
+      <select id="selBlend"><option value="source-over">通常</option><option value="difference">差分</option></select>
+    </div>
+    <div class="grp tools">
+      <span class="lbl">比率</span>
+      <select id="selAspect"><option>9:16</option><option>16:9</option><option>4:5</option><option>1:1</option></select>
+    </div>
+    <div class="grp tools">
+      <span class="lbl">ガイド</span>
+      <button data-guide="thirds">3分割</button>
+      <button data-guide="phi">黄金比</button>
+      <button data-guide="spiral">スパイラル</button>
+      <button id="btnOri" title="スパイラルの向き">↻</button>
+      <button data-guide="safe">セーフ</button>
+      <button data-guide="shorts">Shorts UI</button>
+      <button data-guide="center">中心</button>
+    </div>
+    <div class="grp tools">
+      <button id="btnHist">ヒストグラム</button>
+      <button id="btnMirror">ミラー</button>
+      <button id="btnSave">💾 保存</button>
+    </div>
+  </div>
+  <div id="stage">
+    <div id="hint">📁 参考画像(またはカット分析のZIP)を追加 / ドロップ<br>📷 カメラ or 🖼 画像 で比較対象を表示<br>←→ で参考を切替 / 1・2・3 で表示モード</div>
+    <canvas id="hist" width="256" height="96" hidden></canvas>
+    <div id="drop">ここにドロップ</div>
+  </div>
+  <div id="strip"></div>
+</div>
+<div id="toast"></div>
+<input id="fileRef" type="file" accept="image/*,.zip,application/zip" multiple>
+<input id="fileImg" type="file" accept="image/*">
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const PHI = (1 + Math.sqrt(5)) / 2;
+
+  // ---- 設定(端末ごとに記憶) ----
+  const DEF = {
+    mode: 'overlay', opacity: 50, blend: 'source-over', aspect: '9:16', mirror: false, hist: false, spiralOri: 0,
+    guides: { thirds: true, phi: false, spiral: false, safe: false, shorts: true, center: false },
+  };
+  let ST = DEF;
+  try { ST = { ...DEF, ...JSON.parse(localStorage.getItem('compcheck') || '{}') }; ST.guides = { ...DEF.guides, ...ST.guides }; } catch (e) {}
+  const save = () => { try { localStorage.setItem('compcheck', JSON.stringify(ST)); } catch (e) {} };
+
+  const toast = (msg) => {
+    const t = $('#toast'); t.textContent = msg; t.style.opacity = 1;
+    clearTimeout(toast.to); toast.to = setTimeout(() => { t.style.opacity = 0; }, 2500);
+  };
+
+  // ---- 比較対象(カメラ or 画像) ----
+  const camVideo = document.createElement('video');
+  camVideo.playsInline = true; camVideo.muted = true;
+  let camStream = null, base = null; // base = { el, cam }
+  const freezeCanvas = document.createElement('canvas');
+
+  const srcSize = (el) => el instanceof HTMLVideoElement ? [el.videoWidth, el.videoHeight]
+    : el instanceof HTMLImageElement ? [el.naturalWidth, el.naturalHeight] : [el.width, el.height];
+
+  const stopCam = () => { if (camStream) camStream.getTracks().forEach((t) => t.stop()); camStream = null; };
+
+  const startCam = async (deviceId) => {
+    if (!navigator.mediaDevices?.getUserMedia) return toast('カメラはHTTPSで開いたときだけ使える');
+    stopCam();
+    const size = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({
+        audio: false, video: deviceId ? { deviceId: { exact: deviceId }, ...size } : { facingMode: 'environment', ...size },
+      });
+    } catch (e) { return toast('カメラを開けない: ' + e.message); }
+    camVideo.srcObject = camStream;
+    await camVideo.play();
+    base = { el: camVideo, cam: true };
+    // 権限が出たあとでないとラベルが取れない
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    const sel = $('#selCam');
+    const curId = camStream.getVideoTracks()[0].getSettings().deviceId;
+    sel.replaceChildren(...devs.map((d, i) => new Option(d.label || `カメラ${i + 1}`, d.deviceId, false, d.deviceId === curId)));
+    sel.hidden = devs.length < 2;
+    syncUI();
+  };
+
+  const toggleFreeze = () => {
+    if (!base?.cam) return;
+    if (base.el === camVideo) {
+      freezeCanvas.width = camVideo.videoWidth; freezeCanvas.height = camVideo.videoHeight;
+      freezeCanvas.getContext('2d').drawImage(camVideo, 0, 0);
+      base = { el: freezeCanvas, cam: true };
+    } else base = { el: camVideo, cam: true };
+    syncUI();
+  };
+
+  const loadImage = (blob) => new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img); img.onerror = rej;
+    img.src = URL.createObjectURL(blob);
+  });
+
+  // ---- 参考画像 ----
+  let refs = [], cur = -1, split = 0.5;
+  const mime = (n) => /\.png$/i.test(n) ? 'image/png' : /\.webp$/i.test(n) ? 'image/webp' : 'image/jpeg';
+
+  // ZIP読み込み(無圧縮と通常のdeflateに対応)
+  const readZip = async (file) => {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const dv = new DataView(buf.buffer);
+    let e = buf.length - 22;
+    while (e >= 0 && dv.getUint32(e, true) !== 0x06054b50) e--;
+    if (e < 0) throw new Error('ZIPとして読めない');
+    const n = dv.getUint16(e + 10, true), dec = new TextDecoder();
+    let p = dv.getUint32(e + 16, true);
+    const out = [];
+    for (let i = 0; i < n && dv.getUint32(p, true) === 0x02014b50; i++) {
+      const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true);
+      const nl = dv.getUint16(p + 28, true), xl = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true);
+      const lo = dv.getUint32(p + 42, true);
+      const name = dec.decode(buf.subarray(p + 46, p + 46 + nl));
+      p += 46 + nl + xl + cl;
+      if (!/\.(jpe?g|png|webp)$/i.test(name) || name.includes('__MACOSX')) continue;
+      const ds = lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true);
+      const raw = new Blob([buf.subarray(ds, ds + csize)]);
+      let blob;
+      if (method === 0) blob = raw;
+      else if (method === 8) blob = await new Response(raw.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+      else continue;
+      out.push({ name: name.split('/').pop(), blob: new Blob([blob], { type: mime(name) }) });
+    }
+    return out;
+  };
+
+  const addFiles = async (files) => {
+    const items = [];
+    for (const f of files) {
+      try {
+        if (/\.zip$/i.test(f.name) || f.type.includes('zip')) items.push(...await readZip(f));
+        else if (f.type.startsWith('image/')) items.push({ name: f.name, blob: f });
+      } catch (e) { toast(`${f.name}: ${e.message}`); }
+    }
+    items.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    for (const it of items) {
+      try { refs.push({ name: it.name, img: await loadImage(it.blob) }); } catch (e) {}
+    }
+    if (items.length) toast(`${items.length}枚追加`);
+    if (cur < 0 && refs.length) cur = 0;
+    renderStrip();
+  };
+
+  const select = (i) => {
+    if (!refs.length) return;
+    cur = (i + refs.length) % refs.length;
+    renderStrip();
+  };
+
+  const renderStrip = () => {
+    const strip = $('#strip');
+    const info = document.createElement('span');
+    info.className = 'info';
+    info.textContent = refs.length ? `${cur + 1}/${refs.length}  ${refs[cur].name}` : '参考画像なし';
+    const clear = document.createElement('button');
+    clear.textContent = '全消去';
+    clear.onclick = () => { refs.forEach((r) => URL.revokeObjectURL(r.img.src)); refs = []; cur = -1; renderStrip(); };
+    strip.replaceChildren(info, ...(refs.length ? [clear] : []), ...refs.map((r, i) => {
+      const im = document.createElement('img');
+      im.src = r.img.src; im.title = r.name;
+      if (i === cur) im.className = 'sel';
+      im.onclick = () => select(i);
+      return im;
+    }));
+    strip.querySelector('img.sel')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    $('#hint').hidden = !!(refs.length || base);
+  };
+
+  // ---- 描画 ----
+  const stage = $('#stage');
+  let views = [];
+  const ensureViews = (n) => {
+    while (views.length < n) {
+      const c = document.createElement('canvas');
+      c.className = 'view';
+      c.addEventListener('pointerdown', onPointer);
+      c.addEventListener('pointermove', (e) => { if (e.buttons) onPointer(e); });
+      stage.insertBefore(c, $('#hist'));
+      views.push(c);
+    }
+    while (views.length > n) views.pop().remove();
+  };
+  const onPointer = (e) => {
+    if (ST.mode !== 'wipe') return;
+    const r = e.target.getBoundingClientRect();
+    split = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  };
+
+  const drawCover = (ctx, el, w, h, mirror) => {
+    const [sw, sh] = srcSize(el);
+    if (!sw || !sh) return;
+    const s = Math.max(w / sw, h / sh), dw = sw * s, dh = sh * s;
+    ctx.save();
+    if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(el, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    ctx.restore();
+  };
+  const drawBase = (ctx, w, h) => base && drawCover(ctx, base.el, w, h, base.cam && ST.mirror);
+  const drawRef = (ctx, w, h) => cur >= 0 && drawCover(ctx, refs[cur].img, w, h, false);
+
+  // 黄金スパイラル: 横長の黄金矩形(φ×1)で四分円をつないだ点列を0〜1に正規化
+  const spiralPts = (() => {
+    const pts = [], sq = [];
+    let x = 0, y = 0, w = PHI, h = 1;
+    for (let k = 0; k < 12; k++) {
+      let cx, cy, a0, s;
+      switch (k % 4) {
+        case 0: s = h; cx = x + s; cy = y + s; a0 = Math.PI; sq.push([x + s, y, x + s, y + h]); x += s; w -= s; break;
+        case 1: s = w; cx = x; cy = y + s; a0 = Math.PI * 1.5; sq.push([x, y + s, x + w, y + s]); y += s; h -= s; break;
+        case 2: s = h; cx = x + w - s; cy = y; a0 = 0; sq.push([x + w - s, y, x + w - s, y + h]); w -= s; break;
+        case 3: s = w; cx = x + s; cy = y + h - s; a0 = Math.PI * 0.5; sq.push([x, y + h - s, x + w, y + h - s]); h -= s; break;
+      }
+      for (let i = 0; i <= 16; i++) {
+        const a = a0 + (Math.PI / 2) * (i / 16);
+        pts.push([(cx + s * Math.cos(a)) / PHI, cy + s * Math.sin(a)]);
+      }
+    }
+    return { pts, sq: sq.map(([a, b, c, d]) => [a / PHI, b, c / PHI, d]) };
+  })();
+
+  const drawGuides = (ctx, w, h) => {
+    const dpr = devicePixelRatio || 1, G = ST.guides;
+    const stroke = (path, color = 'rgba(255,255,255,.85)', width = 1) => {
+      ctx.save();
+      ctx.lineWidth = (width + 2) * dpr; ctx.strokeStyle = 'rgba(0,0,0,.45)'; path(); ctx.stroke();
+      ctx.lineWidth = width * dpr; ctx.strokeStyle = color; path(); ctx.stroke();
+      ctx.restore();
+    };
+    const grid = (fs, color) => stroke(() => {
+      ctx.beginPath();
+      for (const f of fs) { ctx.moveTo(w * f, 0); ctx.lineTo(w * f, h); ctx.moveTo(0, h * f); ctx.lineTo(w, h * f); }
+    }, color);
+    if (G.thirds) grid([1 / 3, 2 / 3]);
+    if (G.phi) grid([1 - 1 / PHI, 1 / PHI], 'rgba(245,182,66,.95)');
+    if (G.center) stroke(() => {
+      const r = Math.min(w, h) * 0.04;
+      ctx.beginPath(); ctx.moveTo(w / 2 - r, h / 2); ctx.lineTo(w / 2 + r, h / 2); ctx.moveTo(w / 2, h / 2 - r); ctx.lineTo(w / 2, h / 2 + r);
+    });
+    if (G.safe) {
+      for (const [f, dash] of [[0.93, []], [0.9, [6, 4]]]) {
+        stroke(() => { ctx.setLineDash(dash.map((d) => d * dpr)); ctx.beginPath(); ctx.rect(w * (1 - f) / 2, h * (1 - f) / 2, w * f, h * f); }, 'rgba(120,220,255,.9)');
+      }
+    }
+    if (G.spiral) {
+      // 縦長フレームでは縦横を入れ替え、向きは反転の組み合わせで4通り
+      const portrait = h > w, fx = ST.spiralOri & 1, fy = ST.spiralOri & 2;
+      const map = ([nx, ny]) => {
+        let X = portrait ? ny : nx, Y = portrait ? nx : ny;
+        if (fx) X = 1 - X; if (fy) Y = 1 - Y;
+        return [X * w, Y * h];
+      };
+      stroke(() => {
+        ctx.beginPath();
+        for (const [a, b, c, d] of spiralPts.sq) { ctx.moveTo(...map([a, b])); ctx.lineTo(...map([c, d])); }
+      }, 'rgba(245,182,66,.35)');
+      stroke(() => {
+        ctx.beginPath();
+        spiralPts.pts.forEach((p, i) => (i ? ctx.lineTo(...map(p)) : ctx.moveTo(...map(p))));
+      }, 'rgba(245,182,66,.95)', 1.5);
+    }
+    if (G.shorts && ST.aspect === '9:16') {
+      // Shortsのタイトル・ボタン類が被るおおよその領域
+      ctx.save();
+      ctx.fillStyle = 'rgba(255,60,60,.18)';
+      ctx.fillRect(0, 0, w, h * 0.11);
+      ctx.fillRect(0, h * 0.75, w, h * 0.25);
+      ctx.fillRect(w * 0.87, h * 0.11, w * 0.13, h * 0.64);
+      ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.font = `${10 * dpr}px system-ui`;
+      ctx.fillText('Shorts UI', 6 * dpr, h * 0.75 + 14 * dpr);
+      ctx.restore();
+    }
+  };
+
+  const label = (ctx, text) => {
+    const dpr = devicePixelRatio || 1;
+    ctx.save();
+    ctx.font = `bold ${11 * dpr}px system-ui`;
+    const tw = ctx.measureText(text).width;
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(6 * dpr, 6 * dpr, tw + 10 * dpr, 18 * dpr);
+    ctx.fillStyle = '#fff'; ctx.fillText(text, 11 * dpr, 19 * dpr);
+    ctx.restore();
+  };
+
+  const layout = () => {
+    const n = ST.mode === 'side' ? 2 : 1;
+    ensureViews(n);
+    const [aw, ah] = ST.aspect.split(':').map(Number), a = aw / ah, gap = 6;
+    const W = stage.clientWidth - 12, H = stage.clientHeight - 12;
+    let vh, dir = 'row';
+    if (n === 1) vh = Math.min(H, W / a);
+    else {
+      const hRow = Math.min(H, (W - gap) / 2 / a), hCol = Math.min((H - gap) / 2, W / a);
+      vh = Math.max(hRow, hCol); dir = hRow >= hCol ? 'row' : 'column';
+    }
+    stage.style.flexDirection = dir;
+    const dpr = devicePixelRatio || 1, cw = Math.round(vh * a), chh = Math.round(vh);
+    for (const c of views) {
+      c.style.width = cw + 'px'; c.style.height = chh + 'px';
+      if (c.width !== cw * dpr || c.height !== chh * dpr) { c.width = cw * dpr; c.height = chh * dpr; }
+    }
+  };
+
+  const render = () => {
+    layout();
+    const [c0, c1] = views, ctx = c0.getContext('2d'), w = c0.width, h = c0.height;
+    ctx.clearRect(0, 0, w, h);
+    if (ST.mode === 'overlay') {
+      drawBase(ctx, w, h);
+      ctx.save();
+      ctx.globalAlpha = base ? ST.opacity / 100 : 1;
+      ctx.globalCompositeOperation = base ? ST.blend : 'source-over';
+      drawRef(ctx, w, h);
+      ctx.restore();
+      drawGuides(ctx, w, h);
+    } else if (ST.mode === 'wipe') {
+      drawBase(ctx, w, h);
+      ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w * split, h); ctx.clip(); drawRef(ctx, w, h); ctx.restore();
+      ctx.fillStyle = '#fff'; ctx.fillRect(w * split - 1, 0, 2 * (devicePixelRatio || 1), h);
+      drawGuides(ctx, w, h);
+      label(ctx, '◀ 参考 | 現在 ▶');
+    } else {
+      drawRef(ctx, w, h); drawGuides(ctx, w, h); label(ctx, cur >= 0 ? `参考 ${cur + 1}/${refs.length}` : '参考');
+      const ctx1 = c1.getContext('2d');
+      ctx1.clearRect(0, 0, c1.width, c1.height);
+      drawBase(ctx1, c1.width, c1.height); drawGuides(ctx1, c1.width, c1.height); label(ctx1, '現在');
+    }
+    if (ST.hist && ++render.n % 6 === 0) drawHist();
+    requestAnimationFrame(render);
+  };
+  render.n = 0;
+
+  // ---- ヒストグラム(ライティング比較: 橙=参考 / 水色=現在) ----
+  const hc = document.createElement('canvas');
+  hc.width = 64; hc.height = 64;
+  const hctx = hc.getContext('2d', { willReadFrequently: true });
+  const lumaHist = (draw) => {
+    hctx.clearRect(0, 0, 64, 64);
+    draw(hctx, 64, 64);
+    const d = hctx.getImageData(0, 0, 64, 64).data, bins = new Float32Array(64);
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      bins[y >> 2]++; sum += y;
+    }
+    return { bins, mean: sum / (d.length / 4) };
+  };
+  const drawHist = () => {
+    const c = $('#hist'), ctx = c.getContext('2d'), W = c.width, H = c.height - 16;
+    ctx.clearRect(0, 0, c.width, c.height);
+    const sets = [];
+    if (cur >= 0) sets.push([lumaHist(drawRef), 'rgba(245,182,66,.6)', '参考']);
+    if (base) sets.push([lumaHist(drawBase), 'rgba(90,200,255,.6)', '現在']);
+    sets.forEach(([hs, col, name], k) => {
+      const max = Math.max(...hs.bins);
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.moveTo(0, H);
+      hs.bins.forEach((v, i) => ctx.lineTo((i + 0.5) * W / 64, H - (v / max) * (H - 4)));
+      ctx.lineTo(W, H); ctx.fill();
+      ctx.font = '10px system-ui';
+      ctx.fillText(`${name} 平均輝度 ${Math.round(hs.mean)}`, 4 + k * 128, H + 12);
+    });
+  };
+
+  // ---- 保存(表示中のビューをPNGで) ----
+  const saveImage = () => {
+    const gap = 8, row = stage.style.flexDirection !== 'column';
+    const out = document.createElement('canvas');
+    const w = views[0].width, h = views[0].height;
+    out.width = row ? w * views.length + gap * (views.length - 1) : w;
+    out.height = row ? h : h * views.length + gap * (views.length - 1);
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, out.width, out.height);
+    views.forEach((v, i) => ctx.drawImage(v, row ? i * (w + gap) : 0, row ? 0 : i * (h + gap)));
+    out.toBlob((b) => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = `compcheck_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }, 'image/png');
+  };
+
+  // ---- UI ----
+  const syncUI = () => {
+    document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === ST.mode));
+    document.querySelectorAll('[data-guide]').forEach((b) => b.classList.toggle('on', ST.guides[b.dataset.guide]));
+    $('#rngOpacity').value = ST.opacity;
+    $('#selBlend').value = ST.blend;
+    $('#selAspect').value = ST.aspect;
+    $('#btnHist').classList.toggle('on', ST.hist);
+    $('#hist').hidden = !ST.hist;
+    $('#btnMirror').classList.toggle('on', ST.mirror);
+    $('#btnCam').classList.toggle('on', !!camStream);
+    $('#btnFreeze').disabled = !base?.cam;
+    $('#btnFreeze').classList.toggle('on', base?.cam && base.el !== camVideo);
+    $('#hint').hidden = !!(refs.length || base);
+    save();
+  };
+
+  document.querySelectorAll('[data-mode]').forEach((b) => { b.onclick = () => { ST.mode = b.dataset.mode; syncUI(); }; });
+  document.querySelectorAll('[data-guide]').forEach((b) => { b.onclick = () => { ST.guides[b.dataset.guide] = !ST.guides[b.dataset.guide]; syncUI(); }; });
+  $('#btnOri').onclick = () => { ST.spiralOri = (ST.spiralOri + 1) % 4; ST.guides.spiral = true; syncUI(); };
+  $('#rngOpacity').oninput = (e) => { ST.opacity = +e.target.value; save(); };
+  $('#selBlend').onchange = (e) => { ST.blend = e.target.value; syncUI(); };
+  $('#selAspect').onchange = (e) => { ST.aspect = e.target.value; syncUI(); };
+  $('#btnHist').onclick = () => { ST.hist = !ST.hist; syncUI(); };
+  $('#btnMirror').onclick = () => { ST.mirror = !ST.mirror; syncUI(); };
+  $('#btnMin').onclick = () => $('#bar').classList.toggle('min');
+  $('#btnCam').onclick = () => {
+    if (camStream) { stopCam(); base = null; $('#selCam').hidden = true; syncUI(); } else startCam();
+  };
+  $('#selCam').onchange = (e) => startCam(e.target.value);
+  $('#btnFreeze').onclick = toggleFreeze;
+  $('#btnImg').onclick = () => $('#fileImg').click();
+  $('#btnRef').onclick = () => $('#fileRef').click();
+  $('#btnPrev').onclick = () => select(cur - 1);
+  $('#btnNext').onclick = () => select(cur + 1);
+  $('#btnSave').onclick = saveImage;
+  $('#fileRef').onchange = (e) => { addFiles([...e.target.files]); e.target.value = ''; };
+  $('#fileImg').onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    stopCam(); $('#selCam').hidden = true;
+    base = { el: await loadImage(f), cam: false };
+    syncUI();
+  };
+
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (e.key === 'ArrowLeft') select(cur - 1);
+    else if (e.key === 'ArrowRight') select(cur + 1);
+    else if (e.key === '1' || e.key === '2' || e.key === '3') { ST.mode = ['overlay', 'side', 'wipe'][+e.key - 1]; syncUI(); }
+  });
+  // ドラッグ&ドロップ / 貼り付け
+  let dragDepth = 0;
+  document.addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; $('#drop').style.display = 'flex'; });
+  document.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('#drop').style.display = 'none'; } });
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => {
+    e.preventDefault(); dragDepth = 0; $('#drop').style.display = 'none';
+    addFiles([...e.dataTransfer.files]);
+  });
+  document.addEventListener('paste', (e) => {
+    const files = [...e.clipboardData.files];
+    if (files.length) addFiles(files);
+  });
+
+  syncUI();
+  renderStrip();
+  requestAnimationFrame(render);
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+  window.__cc = { addFiles, get refs() { return refs; }, ST, syncUI, setBase: (el) => { base = { el, cam: false }; syncUI(); } };
+})();
+</script>
+</body>
+</html>
