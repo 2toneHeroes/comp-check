@@ -55,6 +55,11 @@ iPhone ═══════ 映像(WebRTC・端末間で直接・暗号化) ═
 
 ### サーバー側(自宅PC)
 
+`signal/start-signal.bat` をダブルクリック(デスクトップにショートカットを置くと楽)。ウィンドウを閉じると止まる。
+すでに起動していれば二重に起動せず、`tailscale serve` の設定も毎回確認する。
+
+手動で起動する場合:
+
 ```bash
 node signal/server.js 8790          # 127.0.0.1:8790 で待ち受け(依存なし)
 tailscale serve --bg 8790           # https://<PC名>.<tailnet>.ts.net で tailnet に公開
