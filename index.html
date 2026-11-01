@@ -38,6 +38,13 @@
   #toast { position: fixed; left: 50%; top: 70px; transform: translateX(-50%); background: #333; padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 10; }
   input[type=file] { display: none; }
 
+  /* iPhone → iPad ライブ映像 */
+  #linkPanel { position: fixed; z-index: 30; left: 50%; top: calc(env(safe-area-inset-top) + 60px); transform: translateX(-50%); width: min(360px, calc(100vw - 24px)); background: #1e1e1e; border: 1px solid #444; border-radius: 10px; padding: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.6); }
+  #linkPanel .row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  #linkPanel input { flex: 1; min-width: 0; background: #262626; color: var(--fg); border: 1px solid #3a3a3a; border-radius: 6px; padding: 6px 8px; font: inherit; -webkit-user-select: text; user-select: text; }
+  #lpStatus { color: #9cf; font-size: 12px; margin-bottom: 6px; min-height: 1em; }
+  #lpList button { display: block; width: 100%; text-align: left; margin-bottom: 4px; white-space: normal; }
+
   /* 全画面: ツールバーとサムネイル列を隠し、タップで小さな操作ボタンを出す */
   body.fs #bar, body.fs #strip, body.fs #hint { display: none !important; }
   #fsCtl { position: fixed; top: calc(env(safe-area-inset-top) + 8px); right: calc(env(safe-area-inset-right) + 8px); display: none; gap: 6px; align-items: center; z-index: 20; background: rgba(0,0,0,.55); padding: 6px; border-radius: 8px; transition: opacity .3s; }
@@ -103,6 +110,7 @@
       <button id="btnMirror">ミラー</button>
       <button id="btnSave">💾 保存</button>
       <button id="btnFs" title="全画面(F)">⛶ 全画面</button>
+      <button id="btnLink" title="iPhoneのカメラ映像をiPadで見る">📡 iPad連携</button>
     </div>
   </div>
   <div id="stage">
@@ -118,6 +126,13 @@
   <button id="fsGuides" title="ガイドを一時的に隠す">ガイド</button>
   <button id="fsExit" title="全画面を終了">✕</button>
 </div>
+<div id="linkPanel" hidden>
+  <div class="row" style="justify-content:space-between"><b>iPhone → iPad ライブ映像</b><button id="lpClose">✕</button></div>
+  <div class="row"><input id="lpUrl" placeholder="中継サーバー https://<PC名>.<tailnet>.ts.net" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+  <div class="row"><button id="lpSend">このカメラを送る</button><button id="lpRecv">受信する</button><button id="lpStop" hidden>停止</button></div>
+  <div id="lpStatus"></div>
+  <div id="lpList"></div>
+</div>
 <div id="toast"></div>
 <input id="fileRef" type="file" accept="image/*,.zip,application/zip" multiple>
 <input id="fileImg" type="file" accept="image/*">
@@ -130,7 +145,7 @@
 
   // ---- 設定(端末ごとに記憶) ----
   const DEF = {
-    mode: 'overlay', opacity: 50, blend: 'source-over', aspect: 'auto', mirror: false, hist: false, spiralOri: 0, guideAlpha: 100, camId: '',
+    mode: 'overlay', opacity: 50, blend: 'source-over', aspect: 'auto', mirror: false, hist: false, spiralOri: 0, guideAlpha: 100, camId: '', sigUrl: '',
     guides: { thirds: true, phi: false, spiral: false, safe: false, shorts: true, center: false },
   };
   let ST = DEF;
@@ -193,6 +208,7 @@
       (d.label || `カメラ${i + 1}`) + (d === pickMainBack(devs) ? '(標準)' : ''), d.deviceId, false, d.deviceId === curId)));
     sel.hidden = devs.length < 2;
     syncUI();
+    onCamChanged();
   };
 
   const toggleFreeze = () => {
@@ -637,7 +653,7 @@
   $('#btnMirror').onclick = () => { ST.mirror = !ST.mirror; syncUI(); };
   $('#btnMin').onclick = () => $('#bar').classList.toggle('min');
   $('#btnCam').onclick = () => {
-    if (camStream) { stopCam(); base = null; $('#selCam').hidden = true; syncUI(); } else startCam();
+    if (camStream) { stopLink(); stopCam(); base = null; $('#selCam').hidden = true; syncUI(); } else startCam();
   };
   $('#selCam').onchange = (e) => startCam(e.target.value);
   $('#btnFreeze').onclick = toggleFreeze;
@@ -654,6 +670,187 @@
     base = { el: await loadImage(f), cam: false };
     syncUI();
   };
+
+  // ---- iPhone → iPad ライブ映像(WebRTC) ----
+  // 接続情報(SDP)だけ自宅PCの中継サーバー(signal/server.js、tailnet内専用)で受け渡し、映像は端末間で直接送る
+  const RTC_CFG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+  const rid = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+  const remoteVideo = document.createElement('video');
+  remoteVideo.playsInline = true; remoteVideo.muted = true; remoteVideo.autoplay = true;
+  const link = { role: null, es: null, room: null, me: rid(), pcs: new Map(), listTimer: 0 };
+  const sigBase = () => (ST.sigUrl || '').trim().replace(/\/+$/, '');
+  const lpStatus = (s) => { $('#lpStatus').textContent = s; };
+  const sigPost = (msg) => fetch(`${sigBase()}/rooms/${link.room}`, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ ...msg, from: link.me }),
+  }).catch(() => lpStatus('中継サーバーに送れない'));
+  // 接続情報を1回で送るため、ICE候補が出そろうまで待つ
+  const gathered = (pc) => pc.iceGatheringState === 'complete' ? Promise.resolve() : new Promise((r) => {
+    const t = setTimeout(r, 2500);
+    pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); r(); } });
+  });
+  const deviceName = () => {
+    const ua = navigator.userAgent;
+    const kind = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) || (/Macintosh/.test(ua) && 'ontouchend' in document) ? 'iPad' : /Android/.test(ua) ? 'Android' : 'PC';
+    return `${kind} · ${$('#selCam').selectedOptions[0]?.text || 'カメラ'}`;
+  };
+  const connectedCount = () => [...link.pcs.values()].filter((pc) => pc.connectionState === 'connected').length;
+  const updateLinkUI = () => {
+    $('#btnLink').classList.toggle('on', !!link.role);
+    $('#lpStop').hidden = !link.role;
+    $('#lpSend').hidden = $('#lpRecv').hidden = !!link.role;
+    if (link.role === 'send') lpStatus(`送信中: ${deviceName()} / 視聴 ${connectedCount()}台`);
+  };
+
+  const openEvents = (query) => new Promise((resolve, reject) => {
+    const es = new EventSource(`${sigBase()}/rooms/${link.room}/events?peer=${link.me}${query}`);
+    es.onopen = () => resolve(es);
+    es.onerror = () => { if (es.readyState === EventSource.CLOSED) reject(new Error('closed')); };
+    setTimeout(() => reject(new Error('timeout')), 6000);
+  });
+
+  // 送信(iPhone): カメラ映像を、参加してきた端末ごとに送る
+  const startSend = async () => {
+    if (!sigBase()) return lpStatus('中継サーバーのURLを入れて');
+    if (!camStream) await startCam();
+    if (!camStream) return;
+    link.role = 'send'; link.room = rid();
+    lpStatus('中継サーバーに接続中…');
+    try { link.es = await openEvents(`&name=${encodeURIComponent(deviceName())}`); }
+    catch (e) { link.role = null; updateLinkUI(); return lpStatus('中継サーバーにつながらない(URLとTailscaleを確認)'); }
+    link.es.onmessage = async (e) => {
+      const m = JSON.parse(e.data);
+      if (m.type === 'peer-join') {
+        link.pcs.get(m.from)?.close();
+        const pc = new RTCPeerConnection(RTC_CFG);
+        link.pcs.set(m.from, pc);
+        for (const t of camStream.getVideoTracks()) pc.addTrack(t, camStream);
+        pc.onconnectionstatechange = updateLinkUI;
+        await pc.setLocalDescription(await pc.createOffer());
+        // 家のWi-Fiなら高画質で(上限 6Mbps)
+        for (const s of pc.getSenders()) {
+          const p = s.getParameters();
+          p.encodings = p.encodings?.length ? p.encodings : [{}];
+          p.encodings[0].maxBitrate = 6_000_000;
+          s.setParameters(p).catch(() => {});
+        }
+        await gathered(pc);
+        sigPost({ type: 'offer', to: m.from, sdp: pc.localDescription.sdp });
+      } else if (m.type === 'answer') {
+        await link.pcs.get(m.from)?.setRemoteDescription({ type: 'answer', sdp: m.sdp }).catch(() => {});
+      } else if (m.type === 'peer-leave') {
+        link.pcs.get(m.from)?.close();
+        link.pcs.delete(m.from);
+      }
+      updateLinkUI();
+    };
+    // 生存通知(途絶えるとサーバーが部屋を片付ける)
+    link.hbTimer = setInterval(() => sigPost({ type: 'hb' }), 20000);
+    keepAwake();
+    updateLinkUI();
+  };
+  // カメラを切り替えたら送信中の映像も差し替える
+  const onCamChanged = () => {
+    if (link.role !== 'send' || !camStream) return;
+    const track = camStream.getVideoTracks()[0];
+    for (const pc of link.pcs.values()) for (const s of pc.getSenders()) s.replaceTrack(track).catch(() => {});
+    updateLinkUI();
+  };
+
+  // 受信(iPad): 送信中の端末を一覧から選ぶ
+  const listSenders = async () => {
+    if (!sigBase()) return lpStatus('中継サーバーのURLを入れて');
+    let list;
+    try { list = await (await fetch(`${sigBase()}/rooms`)).json(); }
+    catch (e) { return lpStatus('中継サーバーにつながらない(URLとTailscaleを確認)'); }
+    lpStatus(list.length ? '見る端末を選ぶ' : '送信中の端末なし(iPhoneで「このカメラを送る」を押す)');
+    $('#lpList').replaceChildren(...list.map((r) => {
+      const b = document.createElement('button');
+      b.textContent = `${r.name}(${Math.round((Date.now() - r.since) / 60000)}分前から)`;
+      b.onclick = () => startRecv(r.room, r.name);
+      return b;
+    }));
+  };
+  const startRecv = async (room, name) => {
+    clearInterval(link.listTimer);
+    $('#lpList').replaceChildren();
+    link.role = 'recv'; link.room = room;
+    lpStatus(`${name} に接続中…`);
+    try { link.es = await openEvents(''); }
+    catch (e) { link.role = null; updateLinkUI(); return lpStatus('つながらない'); }
+    link.es.onmessage = async (e) => {
+      const m = JSON.parse(e.data);
+      if (m.type === 'offer') {
+        link.pcs.get(m.from)?.close();
+        const pc = new RTCPeerConnection(RTC_CFG);
+        link.pcs.set(m.from, pc);
+        pc.ontrack = (ev) => {
+          remoteVideo.srcObject = ev.streams[0] || new MediaStream([ev.track]);
+          remoteVideo.play().catch(() => {});
+          stopCam(); $('#selCam').hidden = true;
+          base = { el: remoteVideo, cam: false, remote: true };
+          syncUI();
+        };
+        pc.onconnectionstatechange = () => {
+          if (pc.connectionState === 'connected') lpStatus(`受信中: ${name}`);
+          if (pc.connectionState === 'failed') lpStatus('映像をつなげなかった(同じWi-Fiか確認)');
+        };
+        await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
+        await pc.setLocalDescription(await pc.createAnswer());
+        await gathered(pc);
+        sigPost({ type: 'answer', to: m.from, sdp: pc.localDescription.sdp });
+      } else if (m.type === 'room-closed') {
+        stopLink();
+        lpStatus('送信が終わった');
+      }
+    };
+    keepAwake();
+    updateLinkUI();
+  };
+
+  // 中継サーバーへ退出を知らせる(プロキシ越しだと接続を閉じただけでは伝わらないことがある)
+  const sendLeave = () => {
+    if (!link.room) return;
+    const body = JSON.stringify({ type: 'leave', from: link.me });
+    const url = `${sigBase()}/rooms/${link.room}`;
+    if (!navigator.sendBeacon?.(url, body)) fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body, keepalive: true }).catch(() => {});
+  };
+  addEventListener('pagehide', sendLeave);
+
+  const stopLink = () => {
+    clearInterval(link.listTimer);
+    clearInterval(link.hbTimer);
+    sendLeave();
+    link.es?.close();
+    for (const pc of link.pcs.values()) pc.close();
+    link.pcs.clear();
+    if (link.role === 'recv' && base?.remote) { base = null; remoteVideo.srcObject = null; syncUI(); }
+    link.role = null; link.es = null; link.room = null;
+    if (!document.body.classList.contains('fs')) { wakeLock?.release().catch(() => {}); wakeLock = null; }
+    updateLinkUI();
+    lpStatus('');
+  };
+
+  $('#btnLink').onclick = () => {
+    const p = $('#linkPanel');
+    p.hidden = !p.hidden;
+    $('#lpUrl').value = ST.sigUrl;
+    if (!p.hidden && !link.role) lpStatus(sigBase() ? '' : '中継サーバーのURLを入れて');
+  };
+  $('#lpClose').onclick = () => { $('#linkPanel').hidden = true; clearInterval(link.listTimer); };
+  $('#lpUrl').onchange = (e) => { ST.sigUrl = e.target.value.trim(); save(); };
+  $('#lpSend').onclick = startSend;
+  $('#lpRecv').onclick = () => { listSenders(); clearInterval(link.listTimer); link.listTimer = setInterval(listSenders, 3000); };
+  $('#lpStop').onclick = stopLink;
+  // ?sig=URL 付きで開くと中継サーバーを設定して、URLから消す
+  {
+    const q = new URLSearchParams(location.search);
+    if (q.get('sig')) {
+      ST.sigUrl = q.get('sig'); save();
+      q.delete('sig');
+      history.replaceState(null, '', location.pathname + (q.toString() ? `?${q}` : '') + location.hash);
+      toast('中継サーバーを設定した');
+    }
+  }
 
   // ---- 全画面 ----
   // iPhoneのSafariはページの全画面化に非対応。URLバーが消えるのはホーム画面から開いたときだけ
