@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="#111111">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg">
 <title>Comp Check</title>
@@ -37,6 +37,22 @@
   #drop { position: absolute; inset: 0; border: 3px dashed var(--accent); background: rgba(245,182,66,.08); display: none; align-items: center; justify-content: center; font-size: 16px; pointer-events: none; z-index: 5; }
   #toast { position: fixed; left: 50%; top: 70px; transform: translateX(-50%); background: #333; padding: 8px 14px; border-radius: 6px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 10; }
   input[type=file] { display: none; }
+
+  /* 全画面: ツールバーとサムネイル列を隠し、タップで小さな操作ボタンを出す */
+  body.fs #bar, body.fs #strip, body.fs #hint { display: none !important; }
+  #fsCtl { position: fixed; top: calc(env(safe-area-inset-top) + 8px); right: calc(env(safe-area-inset-right) + 8px); display: none; gap: 6px; align-items: center; z-index: 20; background: rgba(0,0,0,.55); padding: 6px; border-radius: 8px; transition: opacity .3s; }
+  body.fs #fsCtl { display: flex; }
+  #fsCtl.hide { opacity: 0; pointer-events: none; }
+
+  /* 横向きのスマホ: 高さが足りないので ツールバー=左 / サムネイル=右 の縦並びにする */
+  @media (orientation: landscape) and (max-height: 540px) {
+    #app { flex-direction: row; }
+    #bar { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; width: 190px; flex: none; overflow-y: auto; border-bottom: none; border-right: 1px solid var(--line); }
+    #bar.min { width: auto; }
+    #strip { flex-direction: column; width: 90px; flex: none; overflow-y: auto; overflow-x: hidden; border-top: none; border-left: 1px solid var(--line); }
+    #strip img { height: auto; width: 70px; }
+    #strip .info { white-space: normal; word-break: break-all; padding: 0; }
+  }
 </style>
 </head>
 <body>
@@ -64,7 +80,7 @@
     </div>
     <div class="grp tools">
       <span class="lbl">比率</span>
-      <select id="selAspect"><option>9:16</option><option>16:9</option><option>4:5</option><option>1:1</option></select>
+      <select id="selAspect"><option value="auto">自動(向き)</option><option>9:16</option><option>16:9</option><option>4:5</option><option>1:1</option></select>
     </div>
     <div class="grp tools">
       <span class="lbl">ガイド</span>
@@ -86,6 +102,7 @@
       <button id="btnHist">ヒストグラム</button>
       <button id="btnMirror">ミラー</button>
       <button id="btnSave">💾 保存</button>
+      <button id="btnFs" title="全画面(F)">⛶ 全画面</button>
     </div>
   </div>
   <div id="stage">
@@ -94,6 +111,12 @@
     <div id="drop">ここにドロップ</div>
   </div>
   <div id="strip"></div>
+</div>
+<div id="fsCtl">
+  <button id="fsPrev">◀</button><button id="fsNext">▶</button>
+  <input id="fsOpacity" type="range" min="0" max="100" title="透過">
+  <button id="fsGuides" title="ガイドを一時的に隠す">ガイド</button>
+  <button id="fsExit" title="全画面を終了">✕</button>
 </div>
 <div id="toast"></div>
 <input id="fileRef" type="file" accept="image/*,.zip,application/zip" multiple>
@@ -107,7 +130,7 @@
 
   // ---- 設定(端末ごとに記憶) ----
   const DEF = {
-    mode: 'overlay', opacity: 50, blend: 'source-over', aspect: '9:16', mirror: false, hist: false, spiralOri: 0, guideAlpha: 100, camId: '',
+    mode: 'overlay', opacity: 50, blend: 'source-over', aspect: 'auto', mirror: false, hist: false, spiralOri: 0, guideAlpha: 100, camId: '',
     guides: { thirds: true, phi: false, spiral: false, safe: false, shorts: true, center: false },
   };
   let ST = DEF;
@@ -399,7 +422,12 @@
     return { pts, sq: sq.map(([a, b, c, d]) => [a / PHI, b, c / PHI, d]) };
   })();
 
+  // 比率「自動」は端末の向きに合わせる(縦持ち 9:16 / 横持ち 16:9)
+  const aspect = () => (ST.aspect === 'auto' ? (innerWidth > innerHeight ? '16:9' : '9:16') : ST.aspect);
+  let guidesHidden = false; // 全画面中に一時的に隠す(保存しない)
+
   const drawGuides = (ctx, w, h, dpr = devicePixelRatio || 1, withCustom = true) => {
+    if (guidesHidden && withCustom) return;
     const G = ST.guides;
     if (withCustom) drawCustomGuides(ctx, w, h);
     const stroke = (path, color = 'rgba(255,255,255,.85)', width = 1) => {
@@ -440,7 +468,7 @@
         spiralPts.pts.forEach((p, i) => (i ? ctx.lineTo(...map(p)) : ctx.moveTo(...map(p))));
       }, 'rgba(245,182,66,.95)', 1.5);
     }
-    if (G.shorts && ST.aspect === '9:16') {
+    if (G.shorts && aspect() === '9:16') {
       // Shortsのタイトル・ボタン類が被るおおよその領域
       ctx.save();
       ctx.fillStyle = 'rgba(255,60,60,.18)';
@@ -466,7 +494,7 @@
   const layout = () => {
     const n = ST.mode === 'side' ? 2 : 1;
     ensureViews(n);
-    const [aw, ah] = ST.aspect.split(':').map(Number), a = aw / ah, gap = 6;
+    const [aw, ah] = aspect().split(':').map(Number), a = aw / ah, gap = 6;
     const W = stage.clientWidth - 12, H = stage.clientHeight - 12;
     let vh, dir = 'row';
     if (n === 1) vh = Math.min(H, W / a);
@@ -564,7 +592,7 @@
 
   // テロップ制作用: 今の比率・今オンのガイドで、短辺1080pxの透過PNGを書き出す
   const saveTemplate = () => {
-    const [aw, ah] = ST.aspect.split(':').map(Number);
+    const [aw, ah] = aspect().split(':').map(Number);
     const s = 1080 / Math.min(aw, ah), c = document.createElement('canvas');
     c.width = Math.round(aw * s); c.height = Math.round(ah * s);
     drawGuides(c.getContext('2d'), c.width, c.height, c.width / 360, false);
@@ -627,8 +655,59 @@
     syncUI();
   };
 
+  // ---- 全画面 ----
+  // iPhoneのSafariはページの全画面化に非対応。URLバーが消えるのはホーム画面から開いたときだけ
+  const isIOS = /iP(hone|od|ad)/.test(navigator.platform) || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+  let wakeLock = null, fsTimer = 0;
+  const keepAwake = async () => {
+    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (e) {}
+  };
+  const showFsCtl = () => {
+    $('#fsCtl').classList.remove('hide');
+    clearTimeout(fsTimer);
+    fsTimer = setTimeout(() => $('#fsCtl').classList.add('hide'), 3000);
+  };
+  const setFs = async (on) => {
+    document.body.classList.toggle('fs', on);
+    if (on) {
+      const el = document.documentElement;
+      if (!fsElement()) {
+        if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+      }
+      if (!fsElement() && isIOS && !standalone) toast('URLバーも隠すには、共有 > ホーム画面に追加 から開く');
+      keepAwake();
+      $('#fsOpacity').value = ST.opacity;
+      showFsCtl();
+    } else {
+      guidesHidden = false;
+      $('#fsGuides').textContent = 'ガイド';
+      if (fsElement()) (document.exitFullscreen || document.webkitExitFullscreen).call(document)?.catch?.(() => {});
+      wakeLock?.release().catch(() => {});
+      wakeLock = null;
+    }
+  };
+  // Escキーなどでブラウザの全画面が解除されたら、こちらも戻す
+  const onFsChange = () => { if (!fsElement() && document.body.classList.contains('fs') && !isIOS) setFs(false); };
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  // 画面がバックグラウンドに回るとスリープ防止が外れるので取り直す
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && document.body.classList.contains('fs')) keepAwake();
+  });
+  $('#btnFs').onclick = () => setFs(true);
+  $('#fsExit').onclick = () => setFs(false);
+  $('#fsPrev').onclick = () => { select(cur - 1); showFsCtl(); };
+  $('#fsNext').onclick = () => { select(cur + 1); showFsCtl(); };
+  $('#fsOpacity').oninput = (e) => { ST.opacity = +e.target.value; $('#rngOpacity').value = ST.opacity; save(); showFsCtl(); };
+  $('#fsGuides').onclick = (e) => { guidesHidden = !guidesHidden; e.target.textContent = guidesHidden ? 'ガイドなし' : 'ガイド'; showFsCtl(); };
+  stage.addEventListener('pointerdown', () => { if (document.body.classList.contains('fs')) showFsCtl(); });
+
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (e.key === 'f' || e.key === 'F') return setFs(!document.body.classList.contains('fs'));
     if (e.key === 'ArrowLeft') select(cur - 1);
     else if (e.key === 'ArrowRight') select(cur + 1);
     else if (e.key === '1' || e.key === '2' || e.key === '3') { ST.mode = ['overlay', 'side', 'wipe'][+e.key - 1]; syncUI(); }
