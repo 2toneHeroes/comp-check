@@ -21,6 +21,9 @@
   .lbl { color: var(--dim); font-size: 11px; margin-right: 2px; }
   button, select { background: #262626; color: var(--fg); border: 1px solid #3a3a3a; border-radius: 6px; padding: 5px 9px; font: inherit; cursor: pointer; white-space: nowrap; }
   button.on { background: var(--accent); color: #111; border-color: var(--accent); }
+  .chip { display: inline-flex; border-radius: 6px; overflow: hidden; }
+  .chip button { border-radius: 0; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+  .chip button + button { padding: 5px 7px; border-left: none; }
   button:disabled { opacity: .4; }
   input[type=range] { width: 90px; accent-color: var(--accent); }
   #stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 0; overflow: hidden; }
@@ -73,6 +76,12 @@
       <button data-guide="shorts">Shorts UI</button>
       <button data-guide="center">中心</button>
     </div>
+    <div class="grp tools" id="customGuides">
+      <span class="lbl">PNG</span>
+      <button id="btnGuidePng" title="透過PNGをガイドとして追加">＋追加</button>
+      <input id="rngGuide" type="range" min="10" max="100" title="PNGガイドの濃さ">
+      <button id="btnTemplate" title="テロップ制作用のテンプレートPNGを保存">テンプレ</button>
+    </div>
     <div class="grp tools">
       <button id="btnHist">ヒストグラム</button>
       <button id="btnMirror">ミラー</button>
@@ -80,7 +89,7 @@
     </div>
   </div>
   <div id="stage">
-    <div id="hint">📁 参考画像(またはカット分析のZIP)を追加 / ドロップ<br>📷 カメラ or 🖼 画像 で比較対象を表示<br>←→ で参考を切替 / 1・2・3 で表示モード</div>
+    <div id="hint">📁 参考画像(またはカット分析のZIP)を追加 / ドロップ<br>📷 カメラ or 🖼 画像 で比較対象を表示<br>←→ で参考を切替 / 1・2・3 で表示モード<br>iPhone: 参考を追加 → ブラウズ → Dropbox のZIPを直接選べる</div>
     <canvas id="hist" width="256" height="96" hidden></canvas>
     <div id="drop">ここにドロップ</div>
   </div>
@@ -89,6 +98,7 @@
 <div id="toast"></div>
 <input id="fileRef" type="file" accept="image/*,.zip,application/zip" multiple>
 <input id="fileImg" type="file" accept="image/*">
+<input id="fileGuide" type="file" accept="image/png,image/webp,image/*" multiple>
 
 <script>
 (() => {
@@ -97,7 +107,7 @@
 
   // ---- 設定(端末ごとに記憶) ----
   const DEF = {
-    mode: 'overlay', opacity: 50, blend: 'source-over', aspect: '9:16', mirror: false, hist: false, spiralOri: 0,
+    mode: 'overlay', opacity: 50, blend: 'source-over', aspect: '9:16', mirror: false, hist: false, spiralOri: 0, guideAlpha: 100,
     guides: { thirds: true, phi: false, spiral: false, safe: false, shorts: true, center: false },
   };
   let ST = DEF;
@@ -231,6 +241,91 @@
     $('#hint').hidden = !!(refs.length || base);
   };
 
+  // ---- PNGガイド(テロップ位置など。IndexedDBに保存して次回も使う) ----
+  const idb = (() => {
+    let dbp;
+    const open = () => dbp || (dbp = new Promise((res, rej) => {
+      const r = indexedDB.open('compcheck', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('guides', { keyPath: 'id' });
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    }));
+    const tx = async (mode, fn) => {
+      const db = await open();
+      return new Promise((res, rej) => {
+        const t = db.transaction('guides', mode), req = fn(t.objectStore('guides'));
+        t.oncomplete = () => res(req.result);
+        t.onerror = () => rej(t.error);
+      });
+    };
+    return { all: () => tx('readonly', (s) => s.getAll()), put: (v) => tx('readwrite', (s) => s.put(v)), del: (id) => tx('readwrite', (s) => s.delete(id)) };
+  })();
+  let customGuides = []; // { id, name, blob, on, img }
+
+  const saveGuide = (g) => idb.put({ id: g.id, name: g.name, blob: g.blob, on: g.on }).catch(() => toast('ガイドを保存できなかった(この端末では次回は消える)'));
+
+  const renderGuideChips = () => {
+    const box = $('#customGuides');
+    box.querySelectorAll('.chip').forEach((c) => c.remove());
+    for (const g of customGuides) {
+      const name = document.createElement('button');
+      name.textContent = g.name.replace(/\.[^.]+$/, '');
+      name.title = g.name;
+      name.classList.toggle('on', g.on);
+      name.onclick = () => { g.on = !g.on; saveGuide(g); renderGuideChips(); };
+      const del = document.createElement('button');
+      del.textContent = '×';
+      del.title = '削除';
+      del.onclick = () => {
+        if (!confirm(`ガイド「${g.name}」を削除する?`)) return;
+        customGuides = customGuides.filter((x) => x !== g);
+        URL.revokeObjectURL(g.img.src);
+        idb.del(g.id).catch(() => {});
+        renderGuideChips();
+      };
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.append(name, del);
+      box.insertBefore(chip, $('#rngGuide'));
+    }
+  };
+
+  const addGuides = async (files) => {
+    for (const f of files) {
+      if (!f.type.startsWith('image/')) continue;
+      try {
+        const g = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, name: f.name, blob: f, on: true, img: await loadImage(f) };
+        customGuides.push(g);
+        saveGuide(g);
+      } catch (e) { toast(`${f.name} を読めない`); }
+    }
+    renderGuideChips();
+  };
+
+  const loadSavedGuides = async () => {
+    try {
+      for (const g of await idb.all()) customGuides.push({ ...g, img: await loadImage(g.blob) });
+    } catch (e) {}
+    renderGuideChips();
+  };
+
+  // フレームと縦横比がほぼ同じなら全面に、違う場合は比率を保って中央に収める
+  const drawCustomGuides = (ctx, w, h) => {
+    const on = customGuides.filter((g) => g.on);
+    if (!on.length) return;
+    ctx.save();
+    ctx.globalAlpha = ST.guideAlpha / 100;
+    for (const g of on) {
+      const iw = g.img.naturalWidth, ih = g.img.naturalHeight;
+      if (Math.abs(iw / ih - w / h) < 0.02 * (w / h)) ctx.drawImage(g.img, 0, 0, w, h);
+      else {
+        const s = Math.min(w / iw, h / ih);
+        ctx.drawImage(g.img, (w - iw * s) / 2, (h - ih * s) / 2, iw * s, ih * s);
+      }
+    }
+    ctx.restore();
+  };
+
   // ---- 描画 ----
   const stage = $('#stage');
   let views = [];
@@ -283,8 +378,9 @@
     return { pts, sq: sq.map(([a, b, c, d]) => [a / PHI, b, c / PHI, d]) };
   })();
 
-  const drawGuides = (ctx, w, h) => {
-    const dpr = devicePixelRatio || 1, G = ST.guides;
+  const drawGuides = (ctx, w, h, dpr = devicePixelRatio || 1, withCustom = true) => {
+    const G = ST.guides;
+    if (withCustom) drawCustomGuides(ctx, w, h);
     const stroke = (path, color = 'rgba(255,255,255,.85)', width = 1) => {
       ctx.save();
       ctx.lineWidth = (width + 2) * dpr; ctx.strokeStyle = 'rgba(0,0,0,.45)'; path(); ctx.stroke();
@@ -445,11 +541,27 @@
     }, 'image/png');
   };
 
+  // テロップ制作用: 今の比率・今オンのガイドで、短辺1080pxの透過PNGを書き出す
+  const saveTemplate = () => {
+    const [aw, ah] = ST.aspect.split(':').map(Number);
+    const s = 1080 / Math.min(aw, ah), c = document.createElement('canvas');
+    c.width = Math.round(aw * s); c.height = Math.round(ah * s);
+    drawGuides(c.getContext('2d'), c.width, c.height, c.width / 360, false);
+    c.toBlob((b) => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = `compcheck_template_${aw}x${ah}_${c.width}x${c.height}.png`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }, 'image/png');
+  };
+
   // ---- UI ----
   const syncUI = () => {
     document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === ST.mode));
     document.querySelectorAll('[data-guide]').forEach((b) => b.classList.toggle('on', ST.guides[b.dataset.guide]));
     $('#rngOpacity').value = ST.opacity;
+    $('#rngGuide').value = ST.guideAlpha;
     $('#selBlend').value = ST.blend;
     $('#selAspect').value = ST.aspect;
     $('#btnHist').classList.toggle('on', ST.hist);
@@ -457,7 +569,7 @@
     $('#btnMirror').classList.toggle('on', ST.mirror);
     $('#btnCam').classList.toggle('on', !!camStream);
     $('#btnFreeze').disabled = !base?.cam;
-    $('#btnFreeze').classList.toggle('on', base?.cam && base.el !== camVideo);
+    $('#btnFreeze').classList.toggle('on', !!(base?.cam && base.el !== camVideo));
     $('#hint').hidden = !!(refs.length || base);
     save();
   };
@@ -466,6 +578,10 @@
   document.querySelectorAll('[data-guide]').forEach((b) => { b.onclick = () => { ST.guides[b.dataset.guide] = !ST.guides[b.dataset.guide]; syncUI(); }; });
   $('#btnOri').onclick = () => { ST.spiralOri = (ST.spiralOri + 1) % 4; ST.guides.spiral = true; syncUI(); };
   $('#rngOpacity').oninput = (e) => { ST.opacity = +e.target.value; save(); };
+  $('#rngGuide').oninput = (e) => { ST.guideAlpha = +e.target.value; save(); };
+  $('#btnGuidePng').onclick = () => $('#fileGuide').click();
+  $('#fileGuide').onchange = (e) => { addGuides([...e.target.files]); e.target.value = ''; };
+  $('#btnTemplate').onclick = saveTemplate;
   $('#selBlend').onchange = (e) => { ST.blend = e.target.value; syncUI(); };
   $('#selAspect').onchange = (e) => { ST.aspect = e.target.value; syncUI(); };
   $('#btnHist').onclick = () => { ST.hist = !ST.hist; syncUI(); };
@@ -512,11 +628,12 @@
 
   syncUI();
   renderStrip();
+  loadSavedGuides();
   requestAnimationFrame(render);
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
-  window.__cc = { addFiles, get refs() { return refs; }, ST, syncUI, setBase: (el) => { base = { el, cam: false }; syncUI(); } };
+  window.__cc = { addFiles, addGuides, get guides() { return customGuides; }, saveTemplate, get refs() { return refs; }, ST, syncUI, setBase: (el) => { base = { el, cam: false }; syncUI(); } };
 })();
 </script>
 </body>
