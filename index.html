@@ -107,7 +107,7 @@
 
   // ---- 設定(端末ごとに記憶) ----
   const DEF = {
-    mode: 'overlay', opacity: 50, blend: 'source-over', aspect: '9:16', mirror: false, hist: false, spiralOri: 0, guideAlpha: 100,
+    mode: 'overlay', opacity: 50, blend: 'source-over', aspect: '9:16', mirror: false, hist: false, spiralOri: 0, guideAlpha: 100, camId: '',
     guides: { thirds: true, phi: false, spiral: false, safe: false, shorts: true, center: false },
   };
   let ST = DEF;
@@ -130,23 +130,44 @@
 
   const stopCam = () => { if (camStream) camStream.getTracks().forEach((t) => t.stop()); camStream = null; };
 
+  // 標準レンズ: 背面の物理1xレンズ(iPhoneの「背面カメラ」/「Back Camera」)
+  // デュアル/トリプルは距離でレンズが勝手に切り替わる仮想カメラ、超広角は俯瞰だと周辺が歪むので除外
+  const OTHER_LENS = /dual|triple|デュアル|トリプル|ultra|超広角|tele|望遠|front|前面|desk|デスク/i;
+  const BACK = /back|rear|背面|environment/i;
+  const pickMainBack = (devs) => devs.find((d) => BACK.test(d.label) && !OTHER_LENS.test(d.label));
+
+  const openCam = (video) => navigator.mediaDevices.getUserMedia({ audio: false, video: { ...video, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+
+  // deviceId: カメラ選択欄で選んだとき。省略時は 前回選んだカメラ → 標準レンズ の順
   const startCam = async (deviceId) => {
     if (!navigator.mediaDevices?.getUserMedia) return toast('カメラはHTTPSで開いたときだけ使える');
     stopCam();
-    const size = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+    const want = deviceId || ST.camId;
     try {
-      camStream = await navigator.mediaDevices.getUserMedia({
-        audio: false, video: deviceId ? { deviceId: { exact: deviceId }, ...size } : { facingMode: 'environment', ...size },
-      });
+      camStream = want ? await openCam({ deviceId: { exact: want } }).catch(() => null) : null;
+      // 前回のカメラが無くなっていたら記憶を消して標準レンズ選びに戻す
+      if (!camStream && want === ST.camId) { ST.camId = ''; save(); }
+      if (!camStream) camStream = await openCam({ facingMode: 'environment' });
     } catch (e) { return toast('カメラを開けない: ' + e.message); }
+    // 権限が出たあとでないとラベルが取れない
+    let devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    let curId = camStream.getVideoTracks()[0].getSettings().deviceId;
+    if (deviceId) { ST.camId = deviceId; save(); }
+    else if (!ST.camId || curId !== ST.camId) {
+      // 自動で選ばれたのが仮想カメラなどなら、標準レンズで開き直す
+      const main = pickMainBack(devs);
+      if (main && main.deviceId !== curId) {
+        stopCam();
+        try { camStream = await openCam({ deviceId: { exact: main.deviceId } }); curId = main.deviceId; }
+        catch (e) { camStream = await openCam({ facingMode: 'environment' }); curId = camStream.getVideoTracks()[0].getSettings().deviceId; }
+      }
+    }
     camVideo.srcObject = camStream;
     await camVideo.play();
     base = { el: camVideo, cam: true };
-    // 権限が出たあとでないとラベルが取れない
-    const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
     const sel = $('#selCam');
-    const curId = camStream.getVideoTracks()[0].getSettings().deviceId;
-    sel.replaceChildren(...devs.map((d, i) => new Option(d.label || `カメラ${i + 1}`, d.deviceId, false, d.deviceId === curId)));
+    sel.replaceChildren(...devs.map((d, i) => new Option(
+      (d.label || `カメラ${i + 1}`) + (d === pickMainBack(devs) ? '(標準)' : ''), d.deviceId, false, d.deviceId === curId)));
     sel.hidden = devs.length < 2;
     syncUI();
   };
