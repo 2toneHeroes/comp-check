@@ -14,10 +14,12 @@ const PORT = +process.argv[2] || 8790;
 const rooms = new Map(); // room -> { name, since, owner, peers: Map(peerId -> res) }
 
 const send = (res, msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
-const cors = (res) => {
+const cors = (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // iOS SafariのEventSourceは Cache-Control / Last-Event-ID を付けてプリフライトしてくるので、求められたヘッダーを許可する
+  res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || 'Content-Type');
+  res.setHeader('Access-Control-Max-Age', '600');
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
 };
 const json = (res, code, body) => {
@@ -48,7 +50,7 @@ setInterval(() => {
 }, 10000);
 
 http.createServer((req, res) => {
-  cors(res);
+  cors(req, res);
   // 接続できないときの切り分け用アクセスログ(ヘルスチェック以外)
   if (!req.url.startsWith('/health')) {
     const ua = req.headers['user-agent'] || '';
