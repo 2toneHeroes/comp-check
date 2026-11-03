@@ -57,6 +57,7 @@ iPhone ═══════ 映像(WebRTC・端末間で直接・暗号化) ═
 
 `signal/start-signal.bat` をダブルクリック(デスクトップにショートカットを置くと楽)。ウィンドウを閉じると止まる。
 すでに起動していれば二重に起動せず、`tailscale serve` の設定も毎回確認する。
+隣のフォルダに `yt-cut-analyzer` があれば、そのインストールページも `/ytcut/` で配る(`--static /ytcut=<dist>`)。
 
 手動で起動する場合:
 

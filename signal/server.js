@@ -7,10 +7,36 @@
 //   GET  /rooms/:room/events?peer=ID SSEで受信(送信側は &name=表示名 で部屋を作る)
 //   POST /rooms/:room                {from, to?, type, ...} を同じ部屋の他の端末へ(to指定ならその端末だけ)
 //
-// usage: node server.js [port]
+// usage: node server.js [port] [--static /prefix=フォルダ ...]
+//   --static はtailnet内に静的ファイルも置きたいとき用(例: YT Cutのインストールページ)
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 
 const PORT = +process.argv[2] || 8790;
+const STATIC = [];
+process.argv.forEach((a, i) => {
+  if (a !== '--static' || !process.argv[i + 1]) return;
+  const [prefix, dir] = process.argv[i + 1].split(/=(.*)/s);
+  if (fs.existsSync(dir)) STATIC.push({ prefix: prefix.replace(/\/+$/, ''), dir: path.resolve(dir) });
+});
+const TYPES = { '.html': 'text/html; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.json': 'application/json' };
+// /prefix/... をフォルダのファイルとして返す(フォルダの外は見せない)。該当しなければ false
+const serveStatic = (req, res, pathname) => {
+  for (const s of STATIC) {
+    if (pathname !== s.prefix && !pathname.startsWith(s.prefix + '/')) continue;
+    let rel = decodeURIComponent(pathname.slice(s.prefix.length)) || '/';
+    if (rel.endsWith('/')) rel += 'install.html';
+    const file = path.resolve(s.dir, '.' + rel);
+    if (!file.startsWith(s.dir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      res.writeHead(404); res.end('not found'); return true;
+    }
+    res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+    fs.createReadStream(file).pipe(res);
+    return true;
+  }
+  return false;
+};
 const rooms = new Map(); // room -> { name, since, owner, peers: Map(peerId -> res) }
 
 const send = (res, msg) => res.write(`data: ${JSON.stringify(msg)}\n\n`);
@@ -62,6 +88,7 @@ http.createServer((req, res) => {
   const m = url.pathname.match(/^\/rooms\/([\w-]{4,40})(\/events)?$/);
 
   if (url.pathname === '/health') return json(res, 200, { ok: true, rooms: rooms.size });
+  if (req.method === 'GET' && serveStatic(req, res, url.pathname)) return;
 
   if (url.pathname === '/rooms' && req.method === 'GET') {
     // 送信側(owner)が接続中の部屋だけ
@@ -117,4 +144,7 @@ http.createServer((req, res) => {
   }
 
   json(res, 404, { error: 'not found' });
-}).listen(PORT, '127.0.0.1', () => log(`comp-check signal server on http://127.0.0.1:${PORT}`));
+}).listen(PORT, '127.0.0.1', () => {
+  log(`comp-check signal server on http://127.0.0.1:${PORT}`);
+  for (const s of STATIC) log(`static ${s.prefix}/ -> ${s.dir}`);
+});

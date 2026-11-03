@@ -21,7 +21,10 @@ echo  このウィンドウを閉じると止まります
 echo ============================================
 "C:\Program Files\Tailscale\tailscale.exe" serve status
 echo.
-node server.js 8790
+rem 隣に yt-cut-analyzer があれば、そのインストールページも /ytcut/ で配る
+set STATIC=
+if exist "%~dp0..\..\yt-cut-analyzer\dist\install.html" set STATIC=--static "/ytcut=%~dp0..\..\yt-cut-analyzer\dist"
+node server.js 8790 %STATIC%
 echo.
 echo 中継サーバーが止まりました。
 pause
