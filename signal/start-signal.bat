@@ -24,6 +24,8 @@ echo.
 rem 隣に yt-cut-analyzer があれば、そのインストールページも /ytcut/ で配る
 set STATIC=
 if exist "%~dp0..\..\yt-cut-analyzer\dist\install.html" set STATIC=--static "/ytcut=%~dp0..\..\yt-cut-analyzer\dist"
+rem comp-check 本体も /app/ で配る(PCのChromeは github.io → tailnet の通信をローカルネットワーク制限で止めるので、同じオリジンで開く用)
+set STATIC=%STATIC% --static "/app=%~dp0.."
 node server.js 8790 %STATIC%
 echo.
 echo 中継サーバーが止まりました。

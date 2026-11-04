@@ -77,6 +77,15 @@ tailscale serve --bg 8790           # https://<PC名>.<tailnet>.ts.net で tailn
 4. iPad: 「📡 iPad連携」→「受信する」→ 一覧からiPhoneを選ぶ
 5. iPadで参考画像を読み込むと、iPhoneの映像に重ねて確認できる
 
+### PCで受信する
+
+PCのChromeは、github.io のページから tailnet(100.x)への通信をローカルネットワーク制限で止めることがある。
+そのため中継サーバーが comp-check 本体も `/app/` で配っている(同じオリジンになるので制限にかからない)。PCではこちらを開く:
+
+```
+https://<PC名>.<tailnet>.ts.net/app/?sig=https://<PC名>.<tailnet>.ts.net
+```
+
 送信側は20秒ごとに生存通知を送り、60秒途絶えた部屋(アプリが強制終了された等)はサーバーが片付ける。
 
 ## 必要な環境

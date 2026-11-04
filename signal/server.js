@@ -20,15 +20,18 @@ process.argv.forEach((a, i) => {
   const [prefix, dir] = process.argv[i + 1].split(/=(.*)/s);
   if (fs.existsSync(dir)) STATIC.push({ prefix: prefix.replace(/\/+$/, ''), dir: path.resolve(dir) });
 });
-const TYPES = { '.html': 'text/html; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.json': 'application/json' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.css': 'text/css; charset=utf-8' };
 // /prefix/... をフォルダのファイルとして返す(フォルダの外は見せない)。該当しなければ false
 const serveStatic = (req, res, pathname) => {
   for (const s of STATIC) {
     if (pathname !== s.prefix && !pathname.startsWith(s.prefix + '/')) continue;
     let rel = decodeURIComponent(pathname.slice(s.prefix.length)) || '/';
-    if (rel.endsWith('/')) rel += 'install.html';
+    // フォルダ指定なら install.html、無ければ index.html を返す
+    if (rel.endsWith('/')) rel += fs.existsSync(path.join(s.dir, rel, 'install.html')) ? 'install.html' : 'index.html';
     const file = path.resolve(s.dir, '.' + rel);
-    if (!file.startsWith(s.dir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    // .git などドットで始まるものは見せない
+    const hidden = path.relative(s.dir, file).split(path.sep).some((p) => p.startsWith('.'));
+    if (hidden || !file.startsWith(s.dir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
       res.writeHead(404); res.end('not found'); return true;
     }
     res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
